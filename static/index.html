@@ -1,6 +1,78 @@
-<!doctype html><html lang="zh-CN"><meta charset="utf-8"><title>巨灾理赔调度</title>
-<style>body{font:15px/1.6 system-ui,sans-serif;max-width:1200px;margin:28px auto;padding:0 20px;color:#263746}table{border-collapse:collapse;width:100%;margin:14px 0}th,td{border:1px solid #d3dce3;padding:7px}th{background:#f1f5f7}.card{background:#fff8eb;border-left:5px solid #d58b21;padding:12px 16px}code{background:#eef2f4;padding:2px 5px}</style>
-<h1>巨灾保险理赔调度</h1><div class="card">状态页按调用角色过滤。写入接口需要 <code>X-User</code>、<code>X-Role</code>，详见 README。</div>
-<h2>优先队列</h2><table id="claims"><thead><tr><th>报案号</th><th>区域</th><th>状态</th><th>优先级</th><th>欺诈分</th><th>负责人</th></tr></thead><tbody></tbody></table>
-<h2>最近时间线</h2><ol id="timeline"></ol>
-<script>async function load(){const d=await fetch('/api/state').then(r=>r.json());document.querySelector('#claims tbody').innerHTML=d.claims.map(r=>`<tr><td>${r.claim_no}</td><td>${r.region}</td><td>${r.status}</td><td>${r.priority_score.toFixed(1)}</td><td>${r.fraud_score}</td><td>${r.assignee||''}</td></tr>`).join('');document.querySelector('#timeline').innerHTML=d.timeline.slice(0,20).map(x=>`<li>${x.created_at} ${x.action} ${x.details}</li>`).join('')}load()</script></html>
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>巨灾理赔调度 · 事件时效中止</title>
+<link rel="stylesheet" href="/static/styles.css">
+</head>
+<body>
+<h1>巨灾保险理赔调度</h1>
+<div class="card">
+  灾害事件期间案件<strong>停表</strong>，解除后按实际暂停时长顺延；重叠事件按区间并集计时，不重复增加天数。
+  写入接口需要 <code>X-User</code>、<code>X-Role</code>（主管 <code>supervisor</code> 可登记/解除事件）。
+</div>
+
+<div class="toolbar">
+  <label>操作人 <input id="user" value="sup1"></label>
+  <label>角色
+    <select id="role">
+      <option value="supervisor" selected>supervisor 主管</option>
+      <option value="intake">intake 受理</option>
+      <option value="adjuster">adjuster 理赔员</option>
+      <option value="surveyor">surveyor 查勘员</option>
+      <option value="auditor">auditor 审计</option>
+    </select>
+  </label>
+  <button id="refresh">刷新</button>
+  <span id="msg" class="msg"></span>
+</div>
+
+<section>
+  <h2>灾害事件（时效中止）</h2>
+  <form id="event-form" class="grid-form">
+    <label>事件编号<input name="code" placeholder="TY-2026-09" required></label>
+    <label>名称<input name="name" placeholder="2026年第18号台风" required></label>
+    <label>灾种
+      <select name="peril_type">
+        <option value="typhoon">台风</option>
+        <option value="earthquake">地震</option>
+        <option value="flood">洪水</option>
+        <option value="other">其他</option>
+      </select>
+    </label>
+    <label>受灾区域<input name="region" placeholder="沿海A区" required></label>
+    <label>开始时间<input name="started_at" placeholder="2026-09-20T08:00" required></label>
+    <label class="span2">备注<input name="note" placeholder="选填"></label>
+    <div class="span2"><button type="submit">登记事件（区域内在办案件立即停表）</button></div>
+  </form>
+  <table id="events">
+    <thead><tr><th>编号</th><th>名称</th><th>灾种</th><th>区域</th><th>开始</th><th>解除</th><th>状态</th><th>操作</th></tr></thead>
+    <tbody></tbody>
+  </table>
+</section>
+
+<section>
+  <h2>优先队列</h2>
+  <table id="claims">
+    <thead><tr>
+      <th>报案号</th><th>区域</th><th>状态</th><th>优先级</th><th>欺诈分</th><th>负责人</th>
+      <th>原期限</th><th>暂停区间</th><th>暂停天数</th><th>当前期限</th><th>时效</th><th>操作</th>
+    </tr></thead>
+    <tbody></tbody>
+  </table>
+</section>
+
+<section>
+  <h2>案件详情</h2>
+  <div id="detail" class="detail-empty">点击队列中的“详情”查看原期限、暂停区间与当前期限。</div>
+</section>
+
+<section>
+  <h2>最近时间线</h2>
+  <ol id="timeline"></ol>
+</section>
+
+<script src="/static/app.js"></script>
+</body>
+</html>
