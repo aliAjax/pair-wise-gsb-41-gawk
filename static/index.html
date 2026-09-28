@@ -1,6 +1,199 @@
-<!doctype html><html lang="zh-CN"><meta charset="utf-8"><title>巨灾理赔调度</title>
-<style>body{font:15px/1.6 system-ui,sans-serif;max-width:1200px;margin:28px auto;padding:0 20px;color:#263746}table{border-collapse:collapse;width:100%;margin:14px 0}th,td{border:1px solid #d3dce3;padding:7px}th{background:#f1f5f7}.card{background:#fff8eb;border-left:5px solid #d58b21;padding:12px 16px}code{background:#eef2f4;padding:2px 5px}</style>
-<h1>巨灾保险理赔调度</h1><div class="card">状态页按调用角色过滤。写入接口需要 <code>X-User</code>、<code>X-Role</code>，详见 README。</div>
-<h2>优先队列</h2><table id="claims"><thead><tr><th>报案号</th><th>区域</th><th>状态</th><th>优先级</th><th>欺诈分</th><th>负责人</th></tr></thead><tbody></tbody></table>
-<h2>最近时间线</h2><ol id="timeline"></ol>
-<script>async function load(){const d=await fetch('/api/state').then(r=>r.json());document.querySelector('#claims tbody').innerHTML=d.claims.map(r=>`<tr><td>${r.claim_no}</td><td>${r.region}</td><td>${r.status}</td><td>${r.priority_score.toFixed(1)}</td><td>${r.fraud_score}</td><td>${r.assignee||''}</td></tr>`).join('');document.querySelector('#timeline').innerHTML=d.timeline.slice(0,20).map(x=>`<li>${x.created_at} ${x.action} ${x.details}</li>`).join('')}load()</script></html>
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>巨灾理赔调度 · 时效中止</title>
+<style>
+  body{font:15px/1.6 system-ui,sans-serif;max-width:1280px;margin:24px auto;padding:0 20px;color:#263746;background:#f6f8fa}
+  h1{margin:8px 0 4px} h2{margin:26px 0 10px;border-bottom:2px solid #d3dce3;padding-bottom:6px}
+  table{border-collapse:collapse;width:100%;margin:12px 0;background:#fff}
+  th,td{border:1px solid #d3dce3;padding:7px 9px;font-size:13px;vertical-align:top}
+  th{background:#eef2f4;white-space:nowrap}
+  code{background:#eef2f4;padding:2px 5px;border-radius:3px}
+  .card{background:#fff8eb;border-left:5px solid #d58b21;padding:10px 16px;margin:10px 0}
+  .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:10px}
+  .field label{display:block;font-size:12px;color:#5a6b7a;margin-bottom:2px}
+  input,select,textarea,button{font:inherit;padding:6px 8px;border:1px solid #b8c4cd;border-radius:4px;box-sizing:border-box;width:100%}
+  button{cursor:pointer;background:#2f6f9f;color:#fff;border:none;width:auto;padding:7px 16px}
+  button.secondary{background:#7a8a96} button.danger{background:#a33d3d}
+  .tag{display:inline-block;padding:1px 8px;border-radius:10px;font-size:12px;color:#fff}
+  .tag.live{background:#c0392b} .tag.ok{background:#2e7d32} .tag.overdue{background:#8e44ad}
+  .tag.gray{background:#7a8a96}
+  tr.clickable{cursor:pointer} tr.clickable:hover{background:#f4f9fd}
+  #detail{background:#fff;border:1px solid #d3dce3;border-radius:6px;padding:16px;margin-top:12px;display:none}
+  .kv{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:6px 18px;margin:8px 0}
+  .kv div b{color:#5a6b7a;font-weight:600}
+  .timeline li{margin-bottom:4px}
+  .paused-row{background:#fdeeee}
+  .muted{color:#7a8a96;font-size:12px}
+  #msg{margin:10px 0;font-weight:600}
+</style>
+</head>
+<body>
+<h1>巨灾保险理赔调度</h1>
+<div class="card">
+  台风/地震等灾害期间，主管可登记<b>时效中止事件</b>：区域内案件受理后 15 天为原期限，事件期间停表；
+  解除时按实际暂停时长顺延，重叠事件只计并集、不重复增加天数。所有写入接口需 <code>X-User</code> / <code>X-Role</code>。
+</div>
+
+<div class="grid" style="margin:10px 0;align-items:end;max-width:560px">
+  <div class="field"><label>操作角色</label>
+    <select id="role">
+      <option value="supervisor">supervisor 主管</option>
+      <option value="intake">intake 受理</option>
+      <option value="adjuster">adjuster 理赔员</option>
+      <option value="surveyor">surveyor 查勘员</option>
+      <option value="auditor">auditor 审计</option>
+    </select>
+  </div>
+  <div class="field"><label>操作人</label><input id="user" value="sup1"></div>
+  <div><button onclick="load()">刷新数据</button></div>
+</div>
+<div id="msg"></div>
+
+<h2>优先队列（含原期限 / 当前期限 / 逾期）</h2>
+<table id="claims">
+  <thead><tr>
+    <th>报案号</th><th>区域</th><th>状态</th><th>优先级</th><th>受理时间</th>
+    <th>原期限(15天)</th><th>当前期限</th><th>已暂停</th><th>时效</th>
+  </tr></thead>
+  <tbody></tbody>
+</table>
+<div class="muted">点行查看案件详情、暂停区间与时间线。</div>
+
+<h2>时效中止事件（主管登记 / 解除）</h2>
+<div class="grid">
+  <div class="field"><label>事件编号</label><input id="ev_no" placeholder="EV-2026-001"></div>
+  <div class="field"><label>事件名称</label><input id="ev_name" placeholder="台风海燕"></div>
+  <div class="field"><label>类型</label>
+    <select id="ev_kind"><option value="typhoon">台风</option><option value="earthquake">地震</option>
+    <option value="flood">洪水</option><option value="other">其他</option></select>
+  </div>
+  <div class="field"><label>受灾区域（逗号分隔，支持辖区前缀）</label><input id="ev_regions" placeholder="沿海A区, 宁波市"></div>
+  <div class="field"><label>开始时间(ISO，留空=现在)</label><input id="ev_start" placeholder="2026-09-25T00:00:00"></div>
+  <div class="field"><label>解除时间(ISO，登记时一般留空)</label><input id="ev_end"></div>
+  <div style="align-self:end"><button onclick="registerEvent()">登记事件（开始停表）</button></div>
+</div>
+<table id="events"><thead><tr>
+  <th>编号</th><th>名称</th><th>类型</th><th>区域</th><th>开始</th><th>解除</th><th>状态</th><th>操作</th>
+</tr></thead><tbody></tbody></table>
+
+<div id="detail"></div>
+
+<h2>最近时间线（含中止登记 / 解除）</h2>
+<ol class="timeline" id="timeline"></ol>
+
+<script>
+const $ = s => document.querySelector(s);
+function headers(){return {"X-User":$('#user').value.trim()||"viewer","X-Role":$('#role').value,"Content-Type":"application/json"};}
+function esc(s){return String(s==null?"":s).replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));}
+function short(ts){return ts?esc(ts.replace("T"," ").replace("+00:00","Z")):""}
+function pauseLabel(sec){
+  if(!sec)return "0";
+  const d=Math.floor(sec/86400), h=Math.floor(sec%86400/3600);
+  return (d?d+"天 ":"")+(h?h+"小时":(d?"":"<1小时"));
+}
+function deadlineCell(d){
+  if(!d)return "";
+  const tags=[];
+  if(d.suspended)tags.push('<span class="tag live">停表中</span>');
+  if(d.overdue)tags.push('<span class="tag overdue">已逾期</span>');
+  if(!d.suspended&&!d.overdue)tags.push('<span class="tag ok">计时中</span>');
+  return tags.join(" ");
+}
+async function api(url, opts){
+  const r=await fetch(url,opts); const d=await r.json().catch(()=>({}));
+  if(!r.ok){$('#msg').innerHTML='<span style="color:#a33d3d">'+esc(d.error||("HTTP "+r.status))+'</span>';throw new Error(d.error);}
+  $('#msg').textContent=""; return d;
+}
+
+async function load(){
+  const d=await api("/api/state",{headers:headers()});
+  if(d.access_limited){
+    $('#claims tbody').innerHTML='<tr><td colspan="9" class="muted">当前角色无权查看，请选择有授权的角色。</td></tr>';
+  }else{
+    $('#claims tbody').innerHTML=d.claims.map(r=>{
+      const dl=r.deadline||{};
+      return `<tr class="clickable ${dl.suspended?'paused-row':''}" onclick="showDetail(${r.id})">
+        <td>${esc(r.claim_no)}</td><td>${esc(r.region)}</td><td>${esc(r.status)}</td>
+        <td>${(r.priority_score||0).toFixed(1)}</td><td>${short(r.created_at)}</td>
+        <td>${short(dl.original_deadline)}</td>
+        <td><b>${short(dl.current_deadline)}</b></td>
+        <td>${pauseLabel(dl.paused_seconds)}</td><td>${deadlineCell(dl)}</td></tr>`;
+    }).join("");
+  }
+  $('#events tbody').innerHTML=(d.events||[]).map(e=>`<tr>
+    <td>${esc(e.event_no)}</td><td>${esc(e.name)}</td><td>${esc(e.kind)}</td>
+    <td>${(e.regions||[]).map(esc).join("、")}</td>
+    <td>${short(e.started_at)}</td><td>${short(e.ended_at)}</td>
+    <td>${e.active?'<span class="tag live">停表中</span>':'<span class="tag gray">已解除</span>'}</td>
+    <td>${e.active?`<button class="danger" onclick="liftEvent('${esc(e.event_no)}')">解除（按实际时长顺延）</button>`:""}</td>
+  </tr>`).join("");
+  $('#timeline').innerHTML=(d.timeline||[]).slice(0,30).map(x=>{
+    let parsed=x.details; try{parsed=JSON.parse(x.details);}catch(e){}
+    const who=x.claim_id?("案件#"+x.claim_id):"全局";
+    return `<li><span class="muted">${short(x.created_at)}</span> <b>${esc(x.action)}</b>
+      <span class="muted">[${esc(x.actor)} · ${who}]</span> <code>${esc(typeof parsed==="object"?JSON.stringify(parsed):parsed)}</code></li>`;
+  }).join("");
+}
+
+async function registerEvent(){
+  const body={event_no:$('#ev_no').value.trim(),name:$('#ev_name').value.trim(),kind:$('#ev_kind').value,
+    regions:$('#ev_regions').value.split(/[,，]/).map(s=>s.trim()).filter(Boolean),
+    started_at:$('#ev_start').value.trim()||null,ended_at:$('#ev_end').value.trim()||null};
+  await api("/api/events/suspensions",{method:"POST",headers:headers(),body:JSON.stringify(body)});
+  await load();
+}
+async function liftEvent(no){
+  await api("/api/events/lift",{method:"POST",headers:headers(),body:JSON.stringify({event_no:no})});
+  await load();
+}
+async function reopenClaim(id,version){
+  const reason=prompt("请输入重开原因："); if(!reason)return;
+  await api("/api/claims/reopen",{method:"POST",headers:headers(),body:JSON.stringify({claim_id:id,reason})});
+  await load(); showDetail(id);
+}
+
+async function showDetail(id){
+  const d=await api("/api/claims/"+id+"/detail",{headers:headers()});
+  const dl=d.deadline||{};
+  const windows=(dl.windows||[]).map(w=>`<tr>
+    <td>${short(w.start)}</td><td>${w.ongoing?'<span class="tag live">进行中</span>':short(w.end)}</td>
+    <td>${pauseLabel(w.paused_seconds)}</td>
+    <td>${w.events.map(e=>esc((e.event_no||"")+" "+(e.name||""))).join("、")}</td></tr>`).join("")
+    ||'<tr><td colspan="4" class="muted">该案件不在任何事件暂停区间内。</td></tr>';
+  const tl=d.timeline.map(x=>{
+    let parsed=x.details;try{parsed=JSON.parse(x.details);}catch(e){}
+    return `<li><span class="muted">${short(x.created_at)}</span> <b>${esc(x.action)}</b>
+      <span class="muted">[${esc(x.actor)}]</span> <code>${esc(typeof parsed==="object"?JSON.stringify(parsed):parsed)}</code></li>`;
+  }).join("");
+  const reopenable=["approved","rejected","closed"].includes(d.status) && $('#role').value==="supervisor";
+  $('#detail').style.display="block";
+  $('#detail').innerHTML=`
+    <h2 style="margin-top:6px">案件 ${esc(d.claim_no)} <button class="secondary" style="float:right" onclick="$('#detail').style.display='none'">关闭</button></h2>
+    <div class="kv">
+      <div><b>区域：</b>${esc(d.region)}</div><div><b>状态：</b>${esc(d.status)}</div>
+      <div><b>受理时间：</b>${short(d.created_at)}</div><div><b>负责人：</b>${esc(d.assignee||"-")} / ${esc(d.surveyor||"-")}</div>
+      <div><b>原期限（受理+15天）：</b>${short(dl.original_deadline)}</div>
+      <div><b>当前期限（含顺延）：</b><b style="color:#2f6f9f">${short(dl.current_deadline)}</b></div>
+      <div><b>累计暂停：</b>${pauseLabel(dl.paused_seconds)}</div>
+      <div><b>时效状态：</b>${deadlineCell(dl)}</div>
+    </div>
+    <h3>暂停区间（重叠事件已按并集去重）</h3>
+    <table><thead><tr><th>暂停开始</th><th>暂停结束</th><th>时长</th><th>覆盖事件</th></tr></thead><tbody>${windows}</tbody></table>
+    <h3>关联事件</h3>
+    <table><thead><tr><th>编号</th><th>名称</th><th>区域</th><th>开始</th><th>解除</th></tr></thead><tbody>
+      ${(d.suspension_events||[]).map(e=>`<tr><td>${esc(e.event_no)}</td><td>${esc(e.name)}</td>
+      <td>${(e.regions||[]).map(esc).join("、")}</td><td>${short(e.started_at)}</td><td>${short(e.ended_at)}</td></tr>`).join("")
+        ||'<tr><td colspan="5" class="muted">无</td></tr>'}</tbody></table>
+    <h3>资料</h3>
+    <div>证据 ${d.evidence.length} 条 · 查勘记录 ${d.survey_notes.length} 条 · 付款 ${d.payments.length} 条
+      ${reopenable?` <button class="danger" onclick="reopenClaim(${d.id})">重开案件继续办理</button>`:""}</div>
+    <h3>时间线</h3><ol class="timeline">${tl||'<li class="muted">无</li>'}</ol>`;
+  $('#detail').scrollIntoView({behavior:"smooth"});
+}
+load();
+</script>
+</body>
+</html>
